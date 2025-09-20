@@ -21,11 +21,9 @@ init()
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
-# Constants
 EARTH_RADIUS = 6371000  # Earth radius in meters
 EARTH_FLATTENING = 1/298.257223563  # WGS-84 flattening parameter
 
-# ASCII Art and UI Elements
 LOGO = r"""
  ________  ________  ________  ________  ________
 |\   ____\|\   __  \|\   __  \|\   __  \|\   ___ \
@@ -96,7 +94,6 @@ def vincenty_distance(lat1, lon1, lat2, lon2):
     try:
         return geodesic((lat1, lon1), (lat2, lon2), ellipsoid='WGS-84').meters
     except ValueError:
-        # Fall back to great-circle distance if Vincenty fails (e.g., nearly antipodal points)
         return great_circle((lat1, lon1), (lat2, lon2)).meters
 
 def trilateration_objective(coordinates, reference_points, measured_distances):
@@ -111,11 +108,9 @@ def trilateration_objective(coordinates, reference_points, measured_distances):
                                                        reference_points["lon"],
                                                        measured_distances)):
         calculated_distance = vincenty_distance(lat, lon, ref_lat, ref_lon)
-        # Use relative error to handle different scales of distances
         relative_error = (calculated_distance - distance) / distance
         errors.append(relative_error)
 
-    # Using sum of squared errors
     return np.sum(np.array(errors) ** 2)
 
 def grid_search(reference_points, measured_distances, resolution=30):
@@ -123,18 +118,15 @@ def grid_search(reference_points, measured_distances, resolution=30):
     Perform a global grid search to find good initial starting points for optimization.
     Returns multiple candidate points to be refined further.
     """
-    # Create grid spanning the whole Earth
     lats = np.linspace(-90, 90, resolution)
     lons = np.linspace(-180, 180, resolution)
 
     best_candidates = []
     best_errors = []
 
-    # Show progress bar for grid search
     total_points = resolution * resolution
     print(f"{Fore.WHITE}Performing global grid search...{Style.RESET_ALL}")
 
-    # Evaluate objective function at each grid point
     point_count = 0
     for lat, lon in product(lats, lons):
         error = trilateration_objective([lat, lon], reference_points, measured_distances)
@@ -142,10 +134,9 @@ def grid_search(reference_points, measured_distances, resolution=30):
         best_errors.append(error)
 
         point_count += 1
-        if point_count % 10 == 0:  # Update progress bar every 10 points for efficiency
+        if point_count % 10 == 0:
             progress_bar(point_count, total_points, prefix='Progress:', suffix='Complete', length=40)
 
-    # Sort by error and return top 5 candidates
     sorted_indices = np.argsort(best_errors)
     return [best_candidates[i] for i in sorted_indices[:5]]
 
@@ -157,7 +148,6 @@ def multi_stage_optimization(reference_points, measured_distances):
     """
     spinner("Running global optimization (differential evolution)", delay=0.1, iterations=10)
 
-    # Stage 1: Global optimization with differential evolution
     bounds = [(-90, 90), (-180, 180)]
     result_global = differential_evolution(
         trilateration_objective,
@@ -172,7 +162,6 @@ def multi_stage_optimization(reference_points, measured_distances):
 
     spinner("Fine-tuning with L-BFGS-B optimization", delay=0.1, iterations=5)
 
-    # Stage 2: Local refinement with L-BFGS-B
     result_local = minimize(
         trilateration_objective,
         result_global.x,
@@ -193,7 +182,6 @@ def alternative_optimization(reference_points, measured_distances):
     best_solution = None
     best_error = float('inf')
 
-    # Start with weighted centroid of reference points
     weights = [1/(d**2) for d in measured_distances]
     total_weight = sum(weights)
     initial_lat = sum(lat * w for lat, w in zip(reference_points["lat"], weights)) / total_weight
@@ -218,7 +206,6 @@ def alternative_optimization(reference_points, measured_distances):
         except:
             pass
 
-    # Also try with antipodal point as starting point
     antipodal_lat = -initial_lat
     antipodal_lon = initial_lon + 180 if initial_lon < 0 else initial_lon - 180
 
@@ -248,7 +235,6 @@ def geometric_approach(reference_points, measured_distances):
     A more geometrically-focused approach that directly estimates intersection points.
     Works by finding the minimum of the sum of squared distances to the three spheres.
     """
-    # Try a grid search followed by local optimization
     candidates = grid_search(reference_points, measured_distances, resolution=40)
 
     best_solution = None
@@ -278,64 +264,53 @@ def plot_results(reference_points, measured_distances, estimated_position):
     fig = plt.figure(figsize=(15, 10))
     ax = fig.add_subplot(1, 1, 1, projection=ccrs.Robinson())
 
-    # Add base map features
     ax.add_feature(cfeature.LAND, facecolor='lightgray')
     ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
     ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
     ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5)
 
-    # Draw reference points and circles
     colors = ['red', 'green', 'blue']
     for i in range(len(reference_points["lat"])):
-        # Plot reference point
         ax.plot(reference_points["lon"][i], reference_points["lat"][i], 'o',
                 color=colors[i], markersize=8, transform=ccrs.PlateCarree(),
                 label=f'Reference Point {i+1}')
 
-        # Draw distance circles - these are geodesic circles
         circle_points = []
-        for angle in range(0, 360, 2):  # 2-degree steps for efficiency
+        for angle in range(0, 360, 2):
             try:
                 bearing = math.radians(angle)
                 dest = geodesic(kilometers=measured_distances[i]/1000).destination(
                     (reference_points["lat"][i], reference_points["lon"][i]), angle)
                 circle_points.append((dest.longitude, dest.latitude))
             except:
-                pass  # Skip problematic points
+                pass
 
         if circle_points:
             circle_points = np.array(circle_points)
             ax.plot(circle_points[:, 0], circle_points[:, 1], '-', color=colors[i],
                     linewidth=1.5, transform=ccrs.PlateCarree(), alpha=0.6)
 
-    # Add estimated position with a star marker
     ax.plot(estimated_position[1], estimated_position[0], '*', color='black',
             markersize=12, transform=ccrs.PlateCarree(),
             label='Estimated Position')
 
-    # Add zoom inset correctly
-    # Create a separate axes for the inset
     from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-
-    # Create inset with the same projection
     axins = inset_axes(ax, width="30%", height="30%", loc='lower left',
                       axes_class=plt.Axes)
 
-    # Make it a cartopy axes with PlateCarree projection
+
     sub_ax = fig.add_axes(axins.get_position(), projection=ccrs.PlateCarree())
-    axins.remove()  # Remove the original inset
-    axins = sub_ax  # Use the cartopy axes instead
+    axins.remove()
+    axins = sub_ax
 
     # Add features to inset
     axins.add_feature(cfeature.LAND, facecolor='lightgray')
     axins.add_feature(cfeature.OCEAN, facecolor='lightblue')
     axins.add_feature(cfeature.COASTLINE, linewidth=0.5)
 
-    # Plot estimated position in inset
     axins.plot(estimated_position[1], estimated_position[0], '*', color='black',
                markersize=10, transform=ccrs.PlateCarree())
 
-    # Set inset extent - focus on the solution
     buffer = 2  # degrees
     axins.set_extent([
         estimated_position[1] - buffer,
@@ -344,16 +319,13 @@ def plot_results(reference_points, measured_distances, estimated_position):
         estimated_position[0] + buffer
     ], crs=ccrs.PlateCarree())
 
-    # Add gridlines to inset
     gl = axins.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
     gl.top_labels = False
     gl.right_labels = False
 
-    # Add legend and title
     ax.legend(loc='lower right')
     plt.title('Ultra-Precision Trilateration Map', fontsize=16)
 
-    # Save the figure
     spinner("Saving visualization image", delay=0.1, iterations=3)
     plt.savefig('trilateration_visualization.png', dpi=300, bbox_inches='tight')
     print(f"{Fore.GREEN}✓ Enhanced visualization saved as 'trilateration_visualization.png'{Style.RESET_ALL}")
@@ -458,13 +430,11 @@ def refine_position(base_point, ref_points, measured_distances, max_iter=1000, t
         best_point = current
         improved = False
 
-        # === Live counter output (no flicker) ===
         total_checked = (iteration + 1) * 152
         counter_message = f"\rRecursively searching for the right coordinate {iteration + 1}/{total_checked}"
         sys.stdout.write(counter_message + ' ' * 10)  # pad to clear remnants
         sys.stdout.flush()
 
-        # Main loop over surrounding points
         for i, pt in enumerate(surrounding):
             total_err, errs = total_distance_error(pt[0], pt[1], ref_points, measured_distances)
 
@@ -475,7 +445,6 @@ def refine_position(base_point, ref_points, measured_distances, max_iter=1000, t
                 improved = True
                 improvements += 1
 
-        # Coordinate update or termination
         if improved:
             current = best_point
         else:
@@ -543,7 +512,6 @@ def main():
     print(f"Initiating comprehensive optimization...{Style.RESET_ALL}")
     time.sleep(0.5)
 
-    # Try multiple optimization methods and choose the best result
     methods = [
         ("Multi-stage optimization", multi_stage_optimization),
         ("Alternative optimization", alternative_optimization),
@@ -575,7 +543,6 @@ def main():
         print(f"{Fore.RED}All optimization methods failed. Please check your input data.{Style.RESET_ALL}")
         return
 
-    # Additional refinement step
     print(f"\nPerforming additional refinement...")
     refined_solution = additional_refinement(best_solution, reference_points, measured_distances)
     refined_error = trilateration_objective(refined_solution, reference_points, measured_distances)
@@ -588,10 +555,8 @@ def main():
 
     estimated_lat, estimated_lon = best_solution
 
-    # Verify and report results
     residuals, rms_error = verify_solution(best_solution, reference_points, measured_distances)
 
-    # Print results
     print_header("TRILATERATION RESULTS")
     print_result(f"Best method", best_method, Fore.BLUE)
 
@@ -604,10 +569,8 @@ def main():
     for i, residual in enumerate(residuals):
         print(f"  Point {i+1}: {residual:.2f} meters")
 
-    # Color-code the RMS error
     print(f"\nRMS Error: {rms_error:.2f} meters")
 
-    # Create visualization
     print_header("VISUALIZATION")
     try:
         plot_results(reference_points, measured_distances, (estimated_lat, estimated_lon))
